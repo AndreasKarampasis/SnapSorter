@@ -4,28 +4,27 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import Tk, filedialog, messagebox
 
+VALID_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".cr2")
+
 def convert_date(timestamp):
     """Convert a timestamp into a formatted date string."""
     date = datetime.fromtimestamp(timestamp)
     return date.strftime('%Y %m %d')
 
-VALID_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".cr2")
-
 if __name__ == "__main__":
     root = Tk()
-    root.withdraw()  # Hide the root window
-
+    root.withdraw()
 
     source_dir = filedialog.askdirectory(title="Select Source Directory")
     if not source_dir:
         messagebox.showerror("Error", "Source directory not selected!")
         sys.exit()
-
     source_dir = Path(source_dir)
 
     dest_dir = filedialog.askdirectory(title="Select Destination Directory")
     if not dest_dir:
         messagebox.showerror("Error", "Destination directory not selected!")
+        sys.exit()
     dest_dir = Path(dest_dir)
 
     for entry in source_dir.rglob("*"):
