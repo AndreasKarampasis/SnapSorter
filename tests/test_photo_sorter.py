@@ -447,3 +447,72 @@ def test_gui_worker_never_touches_tkinter():
                     f"worker calls self.{node.attr}() from a non-main thread"
                 )
     assert "queue" in _top_level_imports(GUI_SOURCE)
+
+
+def test_log_row_is_the_one_that_grows():
+    """The weighted grid row must be the row holding the log frame.
+
+    Weighting the status row instead left the log pinned at its natural height
+    and opened a dead band under the progress bar on taller windows: the textbox
+    measured a constant 200px from 640px to 1000px of window height.
+    """
+    tree = ast.parse(GUI_SOURCE.read_text(encoding="utf-8"))
+    build = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "_build")
+
+    # self.grid_rowconfigure(<int>, weight=1) -- restricted to the root widget,
+    # since child frames such as log_frame weight their own rows too.
+    weighted = None
+    for node in ast.walk(build):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "grid_rowconfigure"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and any(k.arg == "weight" and getattr(k.value, "value", None) == 1
+                        for k in node.keywords)):
+            weighted = node.args[0].value
+    assert weighted is not None, "expected self.grid_rowconfigure(n, weight=1)"
+
+    # Resolve the frame that actually holds the textbox, rather than accepting
+    # any grid(row=weighted) call: status.grid(row=4) exists too, so a loose
+    # match would pass even with the row mis-weighted.
+    textbox = next(n for n in ast.walk(build)
+                   if isinstance(n, ast.Assign)
+                   and any(getattr(t, "attr", None) == "log" for t in n.targets))
+    holder = textbox.value.args[0]            # ctk.CTkTextbox(log_frame, ...)
+    assert isinstance(holder, ast.Name), f"unexpected textbox parent: {holder!r}"
+    log_row = next(
+        (k.value.value for n in ast.walk(build)
+         if isinstance(n, ast.Call)
+         and isinstance(n.func, ast.Attribute)
+         and n.func.attr == "grid"
+         and isinstance(n.func.value, ast.Name)
+         and n.func.value.id == holder.id
+         for k in n.keywords if k.arg == "row"),
+        None,
+    )
+    assert log_row is not None, f"no grid(row=...) found for {holder.id}"
+    assert weighted == log_row, (
+        f"row {weighted} is weighted but the log frame lives in row {log_row}; "
+        "the log would not grow and a dead band would open under the status bar"
+    )
+
+
+def test_no_filesystem_walk_on_the_gui_thread_before_confirming():
+    """Counting files for the confirm dialog froze the window.
+
+    len(list(source.rglob(...))) materialises the whole tree synchronously
+    before the modal appears, which is the freeze the background worker exists
+    to avoid. The dialog must describe the operation, not measure it.
+    """
+    source = GUI_SOURCE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    start = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "_on_start")
+    for node in ast.walk(start):
+        if isinstance(node, ast.Attribute) and node.attr in ("rglob", "glob", "walk"):
+            pytest.fail(f"_on_start walks the filesystem via .{node.attr}() on the "
+                        "GUI thread")
