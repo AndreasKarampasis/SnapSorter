@@ -30,3 +30,31 @@ pytest
 ```
 
 Tests run automatically on GitHub Actions (`windows-latest`, Python 3.10 and 3.11) for every push and pull request to `main`.
+
+## Building Executable
+
+A single-file, windowed Windows executable is built with [PyInstaller](https://pyinstaller.org/).
+
+```bash
+pip install -e ".[dev]"   # installs pyinstaller as a dev dependency
+python build.py
+```
+
+This cleans any previous `build/` and `dist/` output and produces **`dist\SnapSorter.exe`** (~19 MB, no console window). Pass `--no-clean` to keep existing output.
+
+The build is driven by the committed `SnapSorter.spec`, so it is reproducible rather than depending on `pyi-makespec` defaults. Two details in that spec are load-bearing:
+
+- `collect_all("PIL")` — Pillow resolves its codec plugins lazily inside `Image.open()`. Without bundling them the executable throws `UnidentifiedImageError` on valid photos.
+- The `tkinter` submodules are listed explicitly so the GUI dependencies survive stripping.
+
+> **Not code-signed.** Windows SmartScreen will warn on first run, since the binary is unsigned. Also note `--onefile` unpacks to a temp folder at launch, so startup takes a second or two.
+
+### Automated builds
+
+`.github/workflows/build.yml` runs the test suite and then builds the executable on every push and pull request to `main`, uploading `SnapSorter.exe` as a build artifact. Pushing a `v*` tag additionally publishes the binary to a GitHub Release:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+Both workflows are Windows-only because the app targets Windows and its date handling differs by platform.
