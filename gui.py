@@ -51,7 +51,14 @@ class Modal(ctk.CTkToplevel):
         self._center()
         self.after(20, self._focus)
         self.protocol("WM_DELETE_WINDOW", self._dismiss)
-        self.grab_set()
+        try:
+            self.grab_set()
+        except TclError:
+            # Another grab is already active (a stale modal, or another app).
+            # Without the grab the dialog is still usable, just not enforced.
+            # This must never propagate: it would escape the button callback
+            # that opened the dialog and lose the sort result.
+            pass
 
     def _center(self):
         # See SortApp._center: update() first, or the requested geometry is
@@ -118,7 +125,11 @@ class SortApp(ctk.CTk):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+        # Row 5 holds the log frame (see _build below), so that is the row that
+        # must absorb extra height. Weighting row 4 instead leaves the log
+        # pinned at its natural height and opens a dead band beneath the
+        # progress bar on taller windows.
+        self.grid_rowconfigure(5, weight=1)
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(22, 4))
@@ -245,14 +256,17 @@ class SortApp(ctk.CTk):
                   detail=str(exc), accent=ACCENT_ERROR).ask()
             return
 
-        count = len(list(Path(source).rglob("*")))
+        # No file count here on purpose: counting means walking the whole tree,
+        # which blocks the GUI thread for the duration -- exactly the freeze
+        # the background worker exists to avoid. The dialog says what will
+        # happen instead of guessing a number.
         confirmed = Modal(
             self,
             "Confirm move",
             f"Move photos from\n{source}\nto\n{destination}?",
             detail=(
-                f"About {count} items will be scanned. Files are moved, not copied, "
-                "so this cannot be undone."
+                "Every supported image in the source, including subfolders, will be "
+                "moved, not copied, so this cannot be undone."
             ),
             buttons=(("Cancel", False), ("Move Files", True)),
             accent=ACCENT_WARN,

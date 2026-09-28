@@ -30,6 +30,12 @@ python build.py           # build dist\SnapSorter.exe
 
 Do **not** call `self.after(...)`, `self.update()` or any widget method from the worker. Tk calls from a non-main thread only marshal while the main thread is blocking inside `mainloop()`; from a `update()` loop they raise `RuntimeError: main thread is not in main loop`. This was hit and fixed during the GUI build, and `test_gui_worker_never_touches_tkinter` guards it via AST.
 
+## Layout rules in gui.py
+
+- The **log frame lives in grid row 5**, and `self.grid_rowconfigure(5, weight=1)` is what lets it absorb extra height. Weighting row 4 instead (the status frame) pins the textbox at its natural size and opens a dead band under the progress bar. `test_log_row_is_the_one_that_grows` pins the two together via AST.
+- **Never walk the filesystem on the GUI thread.** Counting files for the confirm dialog froze the window, which is the exact thing the worker thread exists to prevent. `test_no_filesystem_walk_on_the_gui_thread_before_confirming` fails on any `rglob`/`glob`/`walk` in `_on_start`.
+- `Modal.__init__` wraps `grab_set()` in `try`/`except TclError`. A modal is a *reporting* mechanism; if the grab fails the dialog is merely unenforced, and letting that error escape a button callback would destroy the sort result.
+
 ## CustomTkinter gotchas (verified on 6.0.0)
 
 - **`CTkEntry(state="readonly")` is broken.** `insert()` is a silent no-op and `get()` always returns `''`. The path display is a `CTkLabel` inside a bordered `CTkFrame` instead. Do not "fix" this back to a readonly entry.
