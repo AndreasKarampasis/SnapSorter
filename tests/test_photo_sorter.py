@@ -385,6 +385,10 @@ def test_image_list_is_snapshotted_before_moving(tmp_path, fixed_date):
 # --- architecture guards ------------------------------------------------
 
 
+REPO_ROOT = pathlib.Path(ps.__file__).resolve().parent
+GUI_SOURCE = REPO_ROOT / "gui.py"
+
+
 def _top_level_imports(path):
     tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
     found = set()
@@ -407,11 +411,11 @@ def test_backend_does_not_import_the_gui_module():
 
 def test_gui_delegates_to_the_backend():
     """gui.py must call sort_photos rather than reimplementing the sort."""
-    gui_imports = _top_level_imports("gui.py")
+    gui_imports = _top_level_imports(GUI_SOURCE)
     assert {"customtkinter", "tkinter", "photo_sorter"} <= gui_imports
     assert "PIL" not in gui_imports  # image work belongs to the backend
 
-    source = pathlib.Path("gui.py").read_text(encoding="utf-8")
+    source = GUI_SOURCE.read_text(encoding="utf-8")
     assert "sort_photos(" in source
     assert "def exif_datetime" not in source   # not duplicated
     assert "def target_for" not in source
@@ -419,7 +423,7 @@ def test_gui_delegates_to_the_backend():
 
 def test_gui_runs_sorting_off_the_gui_thread():
     """Sorting must not run on the GUI thread or the window freezes."""
-    source = pathlib.Path("gui.py").read_text(encoding="utf-8")
+    source = GUI_SOURCE.read_text(encoding="utf-8")
     assert "threading.Thread" in source
 
 
@@ -431,7 +435,7 @@ def test_gui_worker_never_touches_tkinter():
     "main thread is not in main loop". The worker therefore only pushes onto
     a queue that the GUI thread drains.
     """
-    tree = ast.parse(pathlib.Path("gui.py").read_text(encoding="utf-8"))
+    tree = ast.parse(GUI_SOURCE.read_text(encoding="utf-8"))
     workers = [node for node in ast.walk(tree)
                if isinstance(node, ast.FunctionDef) and node.name == "worker"]
     assert workers, "expected a nested worker function in gui.py"
@@ -442,4 +446,4 @@ def test_gui_worker_never_touches_tkinter():
                 assert node.attr not in ("after", "update", "configure", "insert"), (
                     f"worker calls self.{node.attr}() from a non-main thread"
                 )
-    assert "queue" in _top_level_imports("gui.py")
+    assert "queue" in _top_level_imports(GUI_SOURCE)
