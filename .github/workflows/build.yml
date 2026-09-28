@@ -1,0 +1,73 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Windows-only, matching the app's target OS (see ci.yml).
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      # Never ship an executable built from a failing suite.
+      - name: Run test suite
+        run: python -m pytest tests/test_photo_sorter.py -q
+
+      - name: Build executable
+        run: python build.py
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SnapSorter-windows
+          path: dist/SnapSorter.exe
+          if-no-files-found: error
+
+      # Tagged runs additionally publish a GitHub Release.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/SnapSorter.exe --clobber
+          } else {
+            gh release create $tag dist/SnapSorter.exe --generate-notes
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

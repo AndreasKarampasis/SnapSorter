@@ -3,9 +3,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+# PyInstaller output. SnapSorter.spec is deliberately NOT ignored: it is a
+# hand-written build input that is committed so builds are reproducible.
 build/
 dist/
 *.egg-info/
+*.manifest
 
 # IDE
 .idea/
