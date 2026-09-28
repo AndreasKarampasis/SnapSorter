@@ -1,5 +1,7 @@
 """Tests for photo_sorter. Each test pins a bug that was reproduced live."""
+import ast
 import datetime
+import pathlib
 
 import pytest
 from PIL import Image
@@ -305,3 +307,139 @@ def test_exif_sort_end_to_end(tmp_path):
 
     assert (moved, failures) == (1, [])
     assert tree(dest) == [FIXED_FOLDER, f"{FIXED_FOLDER}/trip.jpg"]
+
+
+# --- progress reporting -------------------------------------------------
+
+
+def test_on_progress_reports_every_file(tmp_path, fixed_date):
+    """The GUI drives its progress bar and log from this callback."""
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        (source / name).write_bytes(b"x")
+
+    seen = []
+    moved, failures = ps.sort_photos(
+        source, dest,
+        on_progress=lambda *args: seen.append(args),
+    )
+
+    assert (moved, failures) == (3, [])
+    assert [call[0] for call in seen] == [1, 2, 3]
+    assert all(call[1] == 3 for call in seen)      # total is stable
+    assert all(call[4] is None for call in seen)   # error None on success
+    assert all(call[3] is not None for call in seen)  # target populated
+
+
+def test_on_progress_reports_errors(tmp_path, fixed_date, monkeypatch):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    (source / "boom.jpg").write_bytes(b"x")
+
+    def explode(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ps, "move", explode)
+    seen = []
+    ps.sort_photos(source, dest, on_progress=lambda *args: seen.append(args))
+
+    assert len(seen) == 1
+    assert isinstance(seen[0][4], OSError)
+
+
+def test_sort_photos_without_callback_still_works(tmp_path, fixed_date):
+    """The callback is optional; existing two-argument callers keep working."""
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    (source / "a.jpg").write_bytes(b"x")
+
+    assert ps.sort_photos(source, dest) == (1, [])
+
+
+def test_image_list_is_snapshotted_before_moving(tmp_path, fixed_date):
+    """A progress bar needs a total up front, and the walk must not see its
+    own output directories."""
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    (source / "a.jpg").write_bytes(b"x")
+    (source / "sub").mkdir()
+    (source / "sub" / "b.jpg").write_bytes(b"x")
+
+    totals = []
+    ps.sort_photos(source, dest, on_progress=lambda p, t, *a: totals.append(t))
+
+    assert totals == [2, 2]
+    assert tree(dest) == [
+        FIXED_FOLDER,
+        f"{FIXED_FOLDER}/a.jpg",
+        f"{FIXED_FOLDER}/sub",
+        f"{FIXED_FOLDER}/sub/b.jpg",
+    ]
+
+
+# --- architecture guards ------------------------------------------------
+
+
+def _top_level_imports(path):
+    tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            found.add(node.module.split(".")[0])
+    return found
+
+
+def test_backend_imports_no_gui_toolkit():
+    """The backend must stay importable with no display and unit-testable."""
+    assert _top_level_imports(ps.__file__) == {"datetime", "pathlib", "shutil", "PIL"}
+
+
+def test_backend_does_not_import_the_gui_module():
+    assert "gui" not in _top_level_imports(ps.__file__)
+
+
+def test_gui_delegates_to_the_backend():
+    """gui.py must call sort_photos rather than reimplementing the sort."""
+    gui_imports = _top_level_imports("gui.py")
+    assert {"customtkinter", "tkinter", "photo_sorter"} <= gui_imports
+    assert "PIL" not in gui_imports  # image work belongs to the backend
+
+    source = pathlib.Path("gui.py").read_text(encoding="utf-8")
+    assert "sort_photos(" in source
+    assert "def exif_datetime" not in source   # not duplicated
+    assert "def target_for" not in source
+
+
+def test_gui_runs_sorting_off_the_gui_thread():
+    """Sorting must not run on the GUI thread or the window freezes."""
+    source = pathlib.Path("gui.py").read_text(encoding="utf-8")
+    assert "threading.Thread" in source
+
+
+def test_gui_worker_never_touches_tkinter():
+    """The worker thread must not make Tk calls.
+
+    Tk calls from a non-main thread only marshal while the main thread is
+    blocking inside mainloop(); called from update() they raise
+    "main thread is not in main loop". The worker therefore only pushes onto
+    a queue that the GUI thread drains.
+    """
+    tree = ast.parse(pathlib.Path("gui.py").read_text(encoding="utf-8"))
+    workers = [node for node in ast.walk(tree)
+               if isinstance(node, ast.FunctionDef) and node.name == "worker"]
+    assert workers, "expected a nested worker function in gui.py"
+
+    for worker in workers:
+        for node in ast.walk(worker):
+            if isinstance(node, ast.Attribute):
+                assert node.attr not in ("after", "update", "configure", "insert"), (
+                    f"worker calls self.{node.attr}() from a non-main thread"
+                )
+    assert "queue" in _top_level_imports("gui.py")

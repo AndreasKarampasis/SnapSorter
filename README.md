@@ -6,22 +6,31 @@ PhotoSorter is a lightweight, user-friendly application that organizes your imag
 - **Organizes photos**: Sorts image files (`.png`, `.jpg`, `.jpeg`, `.cr2` — matched case-insensitively) into folders named by capture date.
 - **Reads EXIF dates**: Uses the EXIF `DateTimeOriginal` tag, falling back to `DateTimeDigitized`, the plain TIFF `DateTime` tag, then the filesystem timestamp. This is accurate across platforms, unlike `st_ctime`.
 - **Preserves subfolders**: A file at `trip/day2/a.jpg` lands in `2024-12-03/trip/day2/a.jpg`, so same-named files in different folders never collide.
-- **Graphical User Interface**: Uses a file dialog to select source and destination directories.
-- **Simple & Fast**: Minimal setup and easy-to-understand workflow.
+- **Modern desktop interface**: Built with [CustomTkinter](https://github.com/tomschroeder/CustomTkinter) — follows your Windows light/dark theme, shows a live progress bar and a scrollable activity log, and never freezes while scanning or moving files.
+- **Safe by default**: Confirms the exact source and destination before moving anything, then reports how many files moved versus failed.
 
 ## Prerequisites
 - Python 3.9 or higher
-- [Pillow](https://pillow.readthedocs.io/) — pulls in EXIF support:
+- Runtime dependencies:
   ```bash
-  pip install -r requirements.txt
+  pip install -r requirements.txt   # Pillow + CustomTkinter
   ```
 
-## How It Works
-1. **Select Source Directory**: The app will prompt you to select a directory containing image files. Subfolders are included.
-2. **Select Destination Directory**: Choose where you’d like the organized folders to be created. It must already exist and must not be inside the source directory.
-3. **Automatic Sorting**: The app scans the source tree, reads each photo's capture date, and moves it into a folder named for that date (e.g. `2024-12-03`), reproducing its subfolder structure. A file that cannot be moved is reported and the rest of the run continues.
+## Running
 
-> **Note:** Sorting **moves** files; it does not copy them. There is no undo and no confirmation prompt, so try it on a copy of a small folder first. Empty folders left behind in the source are not pruned.
+```bash
+python gui.py
+```
+
+`photo_sorter.py` holds all the sorting logic and imports no GUI toolkit, so it can be imported and tested on a machine with no display.
+
+## How It Works
+1. **Select Source Directory**: Use **Browse** to pick a folder containing image files. Subfolders are included.
+2. **Select Destination Directory**: Choose where you’d like the organized folders to be created. It must already exist and must not be inside the source directory.
+3. **Confirm**: A dialog restates the exact source and destination. Sorting **moves** files, so this is your checkpoint.
+4. **Automatic Sorting**: The app scans the source tree in the background, reads each photo's capture date, and moves it into a folder named for that date (e.g. `2024-12-03`), reproducing its subfolder structure. Progress, every move, and every error stream into the activity log, and a summary reports files moved versus failures.
+
+> **Note:** Sorting **moves** files; it does not copy them, and it cannot be undone. Empty folders left behind in the source are not pruned.
 
 ## Tests
 ```bash
@@ -40,12 +49,13 @@ pip install -e ".[dev]"   # installs pyinstaller as a dev dependency
 python build.py
 ```
 
-This cleans any previous `build/` and `dist/` output and produces **`dist\SnapSorter.exe`** (~19 MB, no console window). Pass `--no-clean` to keep existing output.
+This cleans any previous `build/` and `dist/` output and produces **`dist\SnapSorter.exe`** (~20 MB, no console window). Pass `--no-clean` to keep existing output.
 
-The build is driven by the committed `SnapSorter.spec`, so it is reproducible rather than depending on `pyi-makespec` defaults. Two details in that spec are load-bearing:
+The build is driven by the committed `SnapSorter.spec`, so it is reproducible rather than depending on `pyi-makespec` defaults. Three details in that spec are load-bearing:
 
+- The entry point is `gui.py`, not `photo_sorter.py` — the latter is a GUI-free backend and would produce an executable with no window.
 - `collect_all("PIL")` — Pillow resolves its codec plugins lazily inside `Image.open()`. Without bundling them the executable throws `UnidentifiedImageError` on valid photos.
-- The `tkinter` submodules are listed explicitly so the GUI dependencies survive stripping.
+- `collect_data_files("customtkinter")` — CustomTkinter loads its colour theme from `assets/themes/*.json` at import time. Those files are invisible to static analysis, and without them the executable dies with `FileNotFoundError` before the first window appears.
 
 > **Not code-signed.** Windows SmartScreen will warn on first run, since the binary is unsigned. Also note `--onefile` unpacks to a temp folder at launch, so startup takes a second or two.
 

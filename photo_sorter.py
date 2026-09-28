@@ -1,9 +1,12 @@
-"""Sort photos into date-named folders, preserving subfolder structure."""
-import sys
+"""Sort photos into date-named folders, preserving subfolder structure.
+
+This module is the whole backend and deliberately imports no GUI toolkit, so
+it stays unit-testable and usable on a machine with no display. The desktop
+interface lives in gui.py.
+"""
 from datetime import datetime
 from pathlib import Path
 from shutil import move
-from tkinter import Tk, filedialog, messagebox
 
 from PIL import Image
 
@@ -99,7 +102,7 @@ def target_for(entry, source, destination, date):
 
 
 def validate_directories(source, destination):
-    """Reject a destination that would nest inside, or equal, the source."""
+    """Raise ValueError if the destination would nest inside, or equal, the source."""
     if not source.is_dir():
         raise ValueError(f"Source directory does not exist: {source}")
     if not destination.is_dir():
@@ -112,62 +115,39 @@ def validate_directories(source, destination):
         raise ValueError("Destination must not be inside the source directory")
 
 
-def sort_photos(source, destination):
+def sort_photos(source, destination, on_progress=None):
     """Sort every image under source into date folders under destination.
 
     Returns (moved, failures), where failures is a list of (path, error). A
     failure on one file never aborts the rest of the run.
+
+    on_progress, if given, is called once per file as
+    on_progress(processed, total, entry, target, error) after that file has
+    been attempted, where error is None on success. It is invoked on the
+    calling thread, which is not necessarily the GUI thread.
     """
     source = Path(source)
     destination = Path(destination)
     validate_directories(source, destination)
 
+    # Snapshot first: the walk must not see directories this run creates, and
+    # the count is needed to drive a progress bar.
+    images = list(iter_images(source))
+    total = len(images)
+
     moved = 0
     failures = []
-    for entry in iter_images(source):
+    for processed, entry in enumerate(images, start=1):
+        target = None
+        error = None
         try:
             target = target_for(entry, source, destination, file_datetime(entry))
             target.parent.mkdir(parents=True, exist_ok=True)
             move(entry, target)
             moved += 1
-        except (OSError, ValueError) as error:
-            failures.append((entry, error))
+        except (OSError, ValueError) as exc:
+            error = exc
+            failures.append((entry, exc))
+        if on_progress is not None:
+            on_progress(processed, total, entry, target, error)
     return moved, failures
-
-
-def main():
-    """Prompt for a source and destination, then sort. Returns an exit code."""
-    root = Tk()
-    root.withdraw()
-
-    source_dir = filedialog.askdirectory(title="Select Source Directory")
-    if not source_dir:
-        messagebox.showerror("Error", "Source directory not selected!")
-        return 1
-    source_dir = Path(source_dir)
-
-    dest_dir = filedialog.askdirectory(title="Select Destination Directory")
-    if not dest_dir:
-        messagebox.showerror("Error", "Destination directory not selected!")
-        return 1
-    dest_dir = Path(dest_dir)
-
-    try:
-        moved, failures = sort_photos(source_dir, dest_dir)
-    except ValueError as error:
-        messagebox.showerror("Error", str(error))
-        return 1
-
-    print(f"Moved {moved} file(s) into {dest_dir}.")
-    for entry, error in failures:
-        print(f"  failed: {entry} ({error})")
-    if failures:
-        messagebox.showerror(
-            "Error",
-            f"{len(failures)} file(s) could not be moved. See the console for details.",
-        )
-    return 1 if failures else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
